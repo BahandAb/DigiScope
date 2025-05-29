@@ -3,13 +3,32 @@ import tkinter as tk
 from PIL import Image, ImageTk
 import threading
 import time
+import sys
 
-# OpenCV video capture
-cap = cv2.VideoCapture(0, cv2.CAP_V4L2)  # Use CAP_V4L2 for better compatibility with Raspberry Pi
+# Try different camera backends for Raspberry Pi compatibility
+def get_camera():
+    # Try V4L2 first (works for most USB webcams)
+    cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+    if cap.isOpened():
+        return cap
+    # Try default backend
+    cap = cv2.VideoCapture(0)
+    if cap.isOpened():
+        return cap
+    # Try MMAL (for Pi Camera with legacy stack, rare)
+    try:
+        cap = cv2.VideoCapture(0, cv2.CAP_ANY)
+        if cap.isOpened():
+            return cap
+    except Exception:
+        pass
+    return None
 
-if not cap.isOpened():
-    print("Error: Unable to access the camera.")
-    exit()
+cap = get_camera()
+
+if not cap or not cap.isOpened():
+    print("Error: Unable to access the camera. Try running 'libcamera-hello' to check camera status.")
+    sys.exit(1)
 
 # Tkinter window setup
 root = tk.Tk()
@@ -20,12 +39,13 @@ main_frame = tk.Frame(root)
 main_frame.pack(fill='both', expand=True)
 
 # Video frame on the left, anchored top-left
-video_frame = tk.Frame(main_frame)
+video_frame = tk.Frame(main_frame, width=480, height=360, bg='black')
+video_frame.pack_propagate(False)  # Prevent frame from shrinking to fit contents
 video_frame.pack(side=tk.LEFT, anchor='nw')
 
 # Label for video frame (create after video_frame)
-display = tk.Label(video_frame)
-display.pack(anchor='nw')
+display = tk.Label(video_frame, bg='black')
+display.pack(anchor='nw', fill='both', expand=True)
 
 # Controls on the right
 controls = tk.Frame(main_frame)
@@ -94,15 +114,20 @@ exposure_slider.pack(fill='x', pady=2)
 
 # Clean up on close
 def on_closing():
-    cap.release()
+    if cap and cap.isOpened():
+        cap.release()
     root.destroy()
 
 root.protocol('WM_DELETE_WINDOW', on_closing)
 
 def update_frame():
     try:
+        if not root.winfo_exists():
+            return  # Window is closed, stop updating
         ret, frame = cap.read()
-        if ret:
+        if ret and frame is not None:
+            # Resize frame to fit display area if needed
+            frame = cv2.resize(frame, (480, 360))
             # Convert BGR to RGB
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(frame_rgb)
@@ -111,7 +136,13 @@ def update_frame():
             display.configure(image=imgtk)
             if recording and video_writer:
                 video_writer.write(frame)
-        root.after(10, update_frame)
+        else:
+            # Show a black frame if no camera frame is available
+            black_img = Image.new('RGB', (480, 360), 'black')
+            imgtk = ImageTk.PhotoImage(image=black_img)
+            display.imgtk = imgtk
+            display.configure(image=imgtk)
+        root.after(30, update_frame)
     except Exception as e:
         print(f"Error in update_frame: {e}")
 
